@@ -104,7 +104,7 @@ VFOset_type VFOSet[NBR_VFOS] = {
   // Second element (index 1)
   {
     .active = true,
-    .vfo = 7032700,
+    .vfo = 7033700,
     .radix = 100
   },
   // Third element (index 2)
@@ -116,7 +116,7 @@ VFOset_type VFOSet[NBR_VFOS] = {
 };
 
 byte v = 1;                   // index into VFOSet array (representing the current VFO)
-byte v_prev;
+// byte v_prev;
 
 
 Si5351 si5351;                // I2C address defaults to x60 in the NT7S lib
@@ -172,20 +172,24 @@ unsigned long keyUpMS = 0;     // time when last CW char was sent
 #define CW_BREAKIN_DROPOUT_MS 1000  // silent period after which Tx drops out
 #define CW_CHAR_SPACE_MS 50         // period after the last paddle closure which marks the end of a CW letter 
 
+#define PBTN_LONG_PRESS_MS  1000  // number of mS of a 'long pess'on a pushbutton 
+
 // Beacon parameters
 #define BEACON_PERIOD_MS 15000    // period in mS between beacon transmits
 unsigned long lastBeaconTx_ms = millis();    // time since last beacon transmit  
 unsigned int bcnMsgNbr = 0;   // counter to alternate between the two beacon messages 
+bool beaconMode = false;      // turns the beacon on or off via a pushbutton
+bool msgInterrupt = false;    // flag to allow message sends to be interrupted by a key or paddle tap 
 
 // CW message declarations
 String morseMsgMem[] = {
-                         "...- ...- ...-   -.. .    ...- -.- ...-- .... -.    --.- ..-. .---- .---- -.-. --- .-.-.",
-                         "-.-. --.- -.-. --.- -.. . ...- -.- ...-- .... -. ...- -.- ...-- .... -. -.-"
+                         "...- ...- ...-  -.. .  ...- -.- ...-- .... -.  --.- ..-. .---- .---- -.-. --- .-.-.",
+                         "- . ... -  -.. .  ...- -.- ...-- .... -.  ...- -.- ...-- .... -.  .-.-."
                        };
 
 
 String morseMsgChars[] = {"VVV DE VK3HN QF11CO .",
-                           "CQ CQ DE VK3HN VK3HN K"};  
+                           "TEST DE VK3HN VK3HN ."};  
 
 //String morseMsgMem[] = {"-.-. --.-    ... --- - .-  ...- -.- ...-- .... -. -..-. .--.   -.-"};
 //                       C    Q     S   O T  A         V   K     3    H  N     /    P      K
@@ -718,18 +722,19 @@ void keyDown()
 }
 
 
-void sendMsg(byte i)
+bool sendMsg(byte i)
 {
   // sends the message at morseMsgMem[i]
   char c;
   byte n = 0; 
+  int j = 0; 
   // Serial.println(morseMsgMem[i].length());
  
   oled128x32.clearDisplay();
   oled128x32.setCursor(0, 0);
   oled128x32.setTextSize(2);  
 
-  for(byte j=0; j < morseMsgMem[i].length(); j++)
+  while(j < morseMsgMem[i].length())
   {
     //Serial.println(morseMsgMem[i].charAt(j)); 
     c = morseMsgMem[i].charAt(j); 
@@ -745,10 +750,18 @@ void sendMsg(byte i)
       oled128x32.print( morseMsgChars[i].charAt(n) );
       oled128x32.display();   // show the scrolling message as we go
       n++;
-    }
+    };
+
+    // see if a paddle or key is down -- if so, interrupt the message send
+    if(readPaddleKey() != (char)0)
+    {
+      return false;  
+    };
+    j++;
   };
 
   Serial.println();
+  return true; 
 }
 
 
@@ -828,22 +841,38 @@ void loop()
   // read pushbuttons
   if( digitalRead(D10_TMP) == LOW )
   {
-    delay(20);
-    if( digitalRead(D10_TMP) == LOW )
+    unsigned long buttonTimer = millis(); 
+    while(digitalRead(D10_TMP) == LOW) delay(100);  // spin while button is down
+
+    if( (millis() - buttonTimer) > PBTN_LONG_PRESS_MS)
     {
-      // A pushbutton was pressed, for now, lets increment the band register
+      // long press, let's toggle the beacon
+      beaconMode = !beaconMode;
+      lastBeaconTx_ms = millis(); 
+      // put something on the display...
+      Serial.print("\nBeacon:"); Serial.println(beaconMode);
+      delay(1000);
+    }
+    else 
+    {
+      //short press, let's increment the band register
       v++;
       if(v == NBR_VFOS) v=0; // wrap around
       Serial.print("New band:");
       Serial.print(v); Serial.print(' '); Serial.println(VFOSet[v].vfo);
-      delay(500);
+      delay(1000);
     }
   };
 
   // Beacon mode...
-  if((millis() - lastBeaconTx_ms) > BEACON_PERIOD_MS) 
+  if(beaconMode && ((millis() - lastBeaconTx_ms) > BEACON_PERIOD_MS)) 
   {
-    sendMsg((bcnMsgNbr++)%2);      // beacon mode, send messages 0 and 1 alternately   
+    bool b;
+    b = sendMsg((bcnMsgNbr++)%2);  // beacon mode, send messages 0 and 1 alternately   
+    if(!b) {
+      beaconMode = false;     // the message was interrupted, stop beacon
+      Serial.print("\nBeacon:"); Serial.println(beaconMode);
+    };
     lastBeaconTx_ms = millis(); 
     delay(100); 
   }
